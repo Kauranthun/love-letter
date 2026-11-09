@@ -48,6 +48,7 @@ export function renderLobby(app) {
       ${url ? `<p class="url">${esc(url)}</p>` : ''}
     </div>
 
+    <button class="btn link" data-act="rules">📜 Règles du jeu</button>
     <button class="btn link" data-act="leave">Quitter le salon</button>
   </section>`;
 }

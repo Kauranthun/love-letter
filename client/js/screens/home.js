@@ -43,6 +43,8 @@ export function renderHome(app) {
       <p class="url">${esc(url)}</p>
       <p class="hint">Scannez avec l'appareil photo du téléphone, connecté au <strong>même Wi-Fi</strong>.</p>
     </div>` : ''}
+
+    <button class="btn link" data-act="rules">📜 Règles du jeu</button>
   </section>`;
 }
 

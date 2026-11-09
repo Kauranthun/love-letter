@@ -4,6 +4,7 @@ import { toast, vibrate } from './util.js';
 import { renderHome, homeActions, bindHome } from './screens/home.js';
 import { renderLobby, lobbyActions } from './screens/lobby.js';
 import { renderGame, gameActions } from './screens/game.js';
+import { openRules } from './rules.js';
 
 /** État de l'application côté client (tout vient du serveur, sauf les choix en cours). */
 const app = {
@@ -16,7 +17,7 @@ const app = {
 };
 
 function freshUi() {
-  return { sel: null, keep: null, order: [], open: {}, confirmHost: null };
+  return { sel: null, keep: null, order: [], open: {}, confirmHost: null, scroll: null };
 }
 
 const ctx = {
@@ -34,7 +35,25 @@ const ctx = {
   },
 };
 
-const actions = { ...homeActions, ...lobbyActions, ...gameActions };
+const actions = {
+  ...homeActions,
+  ...lobbyActions,
+  ...gameActions,
+  rules: () => openRules(app.edition),
+};
+
+/** Grand bandeau « À vous de jouer ! » + vibration. */
+let flashTimer = null;
+function flashMyTurn() {
+  vibrate([150, 80, 150]);
+  const el = document.getElementById('flash');
+  el.hidden = false;
+  el.classList.remove('show');
+  void el.offsetWidth; // relance l'animation
+  el.classList.add('show');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { el.hidden = true; }, 1500);
+}
 
 // ---------------------------------------------------------------------------
 // Rendu
@@ -58,11 +77,18 @@ function render() {
     root.innerHTML = renderLobby(app);
   } else {
     root.innerHTML = renderGame(app);
+    // Après un choix, on amène le panneau d'action à l'écran (petits téléphones).
+    if (app.ui.scroll) {
+      const target = root.querySelector(app.ui.scroll);
+      app.ui.scroll = null;
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }
 }
 
 // Délégation : tout élément avec data-act="nom" déclenche actions[nom].
-document.getElementById('app').addEventListener('click', (ev) => {
+document.addEventListener('click', (ev) => {
+  if (ev.target.closest('#modal')) return;
   const el = ev.target.closest('[data-act]');
   if (!el || el.disabled) return;
   const fn = actions[el.dataset.act];
@@ -110,7 +136,7 @@ socket.on('state', (payload) => {
 
   // C'est mon tour : vibration + remise à zéro de la sélection.
   if (isMyTurn(payload) && !isMyTurn(prev)) {
-    vibrate([150, 80, 150]);
+    if (prev) flashMyTurn();
     ui.sel = null;
   }
   // Sélection devenue invalide (plus mon tour, carte plus en main…)
