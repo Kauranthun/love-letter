@@ -1,0 +1,2 @@
+# Fins de ligne LF partout (évite les avertissements CRLF sous Windows)
+* text=auto eol=lf
