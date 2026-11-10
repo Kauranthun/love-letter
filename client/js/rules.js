@@ -25,8 +25,15 @@ function rulesHtml(ed) {
 
       <h3>Mise en place</h3>
       <p>On mélange les 21 cartes, on écarte la première face cachée. <b>À 2 joueurs</b>, on retire aussi 3 cartes
-      face visible. Chaque joueur pioche 1 carte. Le premier joueur est tiré au hasard ; ensuite, le gagnant
-      de la manche précédente commence.</p>
+      face visible. Chaque joueur pioche 1 carte. Le premier joueur est tiré au hasard ; ensuite,
+      ${ed.rules && ed.rules.nextRoundStarter === 'winner'
+        ? 'le gagnant de la manche précédente commence.'
+        : '<b>le joueur qui a perdu en premier</b> la manche précédente commence (si personne n\'a été éliminé : celui qui avait la plus faible main).'}</p>
+
+      <h3>Main cachée</h3>
+      <p>Vos cartes sont affichées <b>face cachée</b> pour que vos voisins ne les voient pas d'un coup d'œil.
+      Touchez « Voir ma main » pour les retourner : elles se recachent après votre tour, au bout de quelques
+      secondes, ou dès que vous quittez l'application.</p>
 
       <h3>Votre tour</h3>
       <p>Piochez une carte, puis jouez l'une de vos 2 cartes face visible et appliquez son effet.

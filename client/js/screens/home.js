@@ -45,6 +45,7 @@ export function renderHome(app) {
     </div>` : ''}
 
     <button class="btn link" data-act="rules">📜 Règles du jeu</button>
+    ${app.info && app.info.version ? `<p class="version">v${esc(app.info.version)}</p>` : ''}
   </section>`;
 }
 

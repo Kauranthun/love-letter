@@ -258,6 +258,31 @@ describe('Déconnexion et reconnexion', () => {
   });
 });
 
+describe('Journal par manche', () => {
+  test('le journal repart de zéro à chaque nouvelle manche (y compris à la reconnexion)', () => {
+    const t = setup();
+    const a = t.m.create('s1', 'Alice');
+    const b = t.m.join('s2', a.code, 'Bob');
+    t.m.start('s1', { seed: 1 });
+    const room = t.m.rooms.get(a.code);
+    assert.equal(room.events[0].type, 'roundStart');
+    // Fin de manche rapide : le joueur actif élimine l'autre au Garde.
+    const g = room.game;
+    const cur = g.current;
+    const other = cur === a.playerId ? b.playerId : a.playerId;
+    g.players.find((p) => p.id === cur).hand = ['guard', 'priest'];
+    g.players.find((p) => p.id === other).hand = ['baron'];
+    t.m.act(cur === a.playerId ? 's1' : 's2', { type: 'play', card: 'guard', target: other, guess: 'baron' });
+    assert.ok(room.events.some((e) => e.type === 'roundEnd'), 'la fin de manche reste lisible');
+    t.m.hostAction('s1', { type: 'nextRound' });
+    assert.equal(room.events[0].type, 'roundStart');
+    assert.equal(room.events[0].round, 2);
+    assert.ok(!room.events.some((e) => e.type === 'roundEnd' || e.type === 'gameStart'));
+    t.m.resume('s2b', b.token);
+    assert.ok(t.box('s2b').history.every((e) => e.type !== 'roundEnd'));
+  });
+});
+
 describe('Fin de partie', () => {
   test("retour au salon par l'hôte après la fin", () => {
     const t = setup();

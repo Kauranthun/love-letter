@@ -30,6 +30,7 @@ function publicEdition(id) {
     minPlayers: ed.minPlayers,
     maxPlayers: ed.maxPlayers,
     tokensToWin: { ...ed.tokensToWin },
+    rules: { ...(ed.rules || {}) },
     cards: ed.cards.map((c) => ({
       id: c.id, value: c.value, name: c.name, article: c.article, count: c.count,
       text: c.text, targeting: c.targeting || null,

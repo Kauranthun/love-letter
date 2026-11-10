@@ -93,11 +93,16 @@ function priv(events, to, type, text, data = {}) {
   events.push({ scope: 'private', to: [...to], type, text, ...data });
 }
 
-/** Élimine un joueur : il révèle et défausse sa main, et ne joue plus de la manche. */
-function eliminate(state, p, events) {
+/**
+ * Élimine un joueur : il révèle et défausse sa main, et ne joue plus de la manche.
+ * `forced` : élimination décidée par l'hôte (joueur déconnecté) — elle ne compte pas
+ * dans l'ordre des éliminations (qui sert à désigner le premier joueur de la manche suivante).
+ */
+function eliminate(state, p, events, { forced = false } = {}) {
   if (p.eliminated) return;
   p.eliminated = true;
   p.protected = false;
+  if (!forced) state.eliminationOrder.push(p.id);
   const revealed = p.hand.splice(0);
   p.discard.push(...revealed);
   const shown = revealed.length ? ` et révèle ${revealed.map((c) => label(state, c)).join(', ')}` : '';
@@ -137,9 +142,10 @@ function buildDeck(ed) {
 
 /**
  * Crée une partie et lance la première manche (premier joueur tiré au hasard).
- * @param {{players:{id:string,name:string}[], seed?:number|string, editionId?:string}} opts
+ * @param {{players:{id:string,name:string}[], seed?:number|string, editionId?:string,
+ *          options?:{nextRoundStarter?:'firstEliminated'|'winner'}}} opts
  */
-function createGame({ players, seed, editionId = '2019' } = {}) {
+function createGame({ players, seed, editionId = '2019', options = {} } = {}) {
   const ed = getEdition(editionId);
   if (!Array.isArray(players)) throw new GameError('BAD_PLAYERS', 'Liste de joueurs manquante.');
   const n = players.length;
@@ -149,8 +155,13 @@ function createGame({ players, seed, editionId = '2019' } = {}) {
   const ids = new Set(players.map((p) => p.id));
   if (ids.size !== n) throw new GameError('BAD_PLAYERS', 'Identifiants de joueurs en double.');
 
+  const starterRule = options.nextRoundStarter || (ed.rules && ed.rules.nextRoundStarter) || 'winner';
+  if (!['firstEliminated', 'winner'].includes(starterRule)) {
+    throw new GameError('BAD_OPTION', `Option inconnue : « ${starterRule} ».`);
+  }
   const state = {
     editionId,
+    options: { nextRoundStarter: starterRule },
     rng: rng.seedFrom(seed),
     tokensToWin: ed.tokensToWin[n],
     players: players.map((p) => ({
@@ -167,13 +178,16 @@ function createGame({ players, seed, editionId = '2019' } = {}) {
     current: null,           // joueur actif
     startPlayer: null,       // premier joueur de la manche en cours
     pending: null,           // décision en attente (Chancelier)
+    eliminationOrder: [],    // ids des joueurs éliminés dans la manche, dans l'ordre
     roundResult: null,
     nextStarter: null,
+    nextStarterReason: null, // 'firstEliminated' | 'weakestHand' | 'winner' | 'random'
     tiebreak: null,          // ids des joueurs à départager (fin de partie)
     winners: null,           // gagnant(s) de la partie
   };
   const events = [];
   const starter = state.players[rng.randomInt(state, n)].id;
+  state.nextStarterReason = 'random';
   startRound(state, starter, events);
   return { state, events };
 }
@@ -201,6 +215,7 @@ function startRound(state, starterId, events) {
   for (const id of state.roundPlayers) getPlayer(state, id).hand.push(state.deck.shift());
 
   state.pending = null;
+  state.eliminationOrder = [];
   state.roundResult = null;
   state.nextStarter = null;
   state.phase = 'playing';
@@ -208,8 +223,14 @@ function startRound(state, starterId, events) {
   state.startPlayer = starter;
 
   const tb = state.tiebreak ? ' (manche de départage)' : '';
-  pub(events, 'roundStart', `📜 Manche ${state.round}${tb} : ${getPlayer(state, starter).name} commence.`,
-    { round: state.round, starter, faceUp: [...state.faceUp] });
+  const why = starter !== starterId ? '' : {
+    random: ' (tiré au sort)',
+    firstEliminated: ' (a perdu en premier la manche précédente)',
+    weakestHand: ' (avait la plus faible main à la manche précédente)',
+    winner: ' (a gagné la manche précédente)',
+  }[state.nextStarterReason] || '';
+  pub(events, 'roundStart', `📜 Manche ${state.round}${tb} : ${getPlayer(state, starter).name} commence${why}.`,
+    { round: state.round, starter, reason: state.nextStarterReason, faceUp: [...state.faceUp] });
   if (state.faceUp.length) {
     pub(events, 'faceUp', `Cartes retirées face visible : ${state.faceUp.map((c) => label(state, c)).join(', ')}.`,
       { cards: [...state.faceUp] });
@@ -275,7 +296,9 @@ function endRound(state, reason, events) {
   for (const [id, g] of Object.entries(gained)) getPlayer(state, id).tokens += g;
 
   const ordered = rotateFrom(state, state.startPlayer, winners);
-  state.nextStarter = ordered[0] || state.startPlayer;
+  const next = chooseNextStarter(state, ordered, alive, discardSums);
+  state.nextStarter = next.id;
+  state.nextStarterReason = next.reason;
   state.current = null;
   state.pending = null;
   state.roundResult = {
@@ -287,6 +310,9 @@ function endRound(state, reason, events) {
     spyHolders,
     spyBonus,
     gained,
+    eliminationOrder: [...state.eliminationOrder],
+    nextStarter: next.id,
+    nextStarterReason: next.reason,
   };
 
   const names = ordered.map((id) => getPlayer(state, id).name).join(', ');
@@ -299,6 +325,42 @@ function endRound(state, reason, events) {
     pub(events, 'spyBonus', '🕵️ Plusieurs joueurs en lice ont joué une Espionne : pas de bonus.', { player: null });
   }
   checkGameEnd(state, events);
+
+  // Annonce du premier joueur de la manche suivante (en tenant compte d'un éventuel départage).
+  if (state.phase === 'roundOver') {
+    const participants = state.tiebreak || state.players.filter((p) => !p.removed).map((p) => p.id);
+    const first = rotateFrom(state, state.nextStarter, participants)[0];
+    state.roundResult.nextStarter = first;
+    if (first !== state.nextStarter) state.roundResult.nextStarterReason = 'seat';
+    const because = first === state.nextStarter ? {
+      firstEliminated: ' (a perdu en premier)',
+      weakestHand: ' (plus faible main, personne n\'a été éliminé)',
+      winner: ' (gagnant de la manche)',
+    }[state.nextStarterReason] || '' : '';
+    pub(events, 'nextStarter', `➜ ${getPlayer(state, first).name} commencera la manche suivante${because}.`,
+      { player: first, reason: state.roundResult.nextStarterReason });
+  }
+}
+
+/**
+ * Désigne le premier joueur de la manche suivante selon l'option `nextRoundStarter` :
+ *  - 'firstEliminated' : le premier éliminé (hors éliminations par l'hôte) ; si personne n'a été
+ *    éliminé, la plus faible main révélée (puis la plus petite défausse, puis l'ordre du tour) ;
+ *  - 'winner' : le premier gagnant dans l'ordre du tour (règle officielle).
+ */
+function chooseNextStarter(state, orderedWinners, alive, discardSums) {
+  const fallbackWinner = { id: orderedWinners[0] || state.startPlayer, reason: 'winner' };
+  if (state.options.nextRoundStarter !== 'firstEliminated') return fallbackWinner;
+  if (state.eliminationOrder.length) return { id: state.eliminationOrder[0], reason: 'firstEliminated' };
+  if (alive.length > 1 && alive.every((p) => p.hand.length === 1)) {
+    const seat = rotateFrom(state, state.startPlayer, alive.map((p) => p.id));
+    const weakest = [...alive].sort((a, b) =>
+      info(state, a.hand[0]).value - info(state, b.hand[0]).value ||
+      discardSums[a.id] - discardSums[b.id] ||
+      seat.indexOf(a.id) - seat.indexOf(b.id))[0];
+    return { id: weakest.id, reason: 'weakestHand' };
+  }
+  return fallbackWinner;
 }
 
 /** Vérifie si la partie est terminée (ou s'il faut une manche de départage). */
@@ -524,7 +586,7 @@ function doForceEliminate(state, targetId, events) {
     state.pending = null;
   }
   pub(events, 'kick', `L'hôte retire ${t.name} de la manche (déconnecté).`, { player: targetId });
-  eliminate(state, t, events);
+  eliminate(state, t, events, { forced: true });
   if (state.current === targetId) {
     endTurn(state, events);
   } else if (alivePlayers(state).length <= 1) {

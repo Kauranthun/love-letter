@@ -19,6 +19,7 @@ const { publicEdition } = require('./editions');
 const { getLanAddresses, isLoopbackHost } = require('./net');
 
 const CLIENT_DIR = path.join(__dirname, '..', 'client');
+const { version: VERSION } = require('../package.json');
 
 /**
  * Crée le serveur (sans le démarrer). Utilisé par `npm start` et par les tests d'intégration.
@@ -56,6 +57,7 @@ function createServer({ editionId = '2019' } = {}) {
 
   app.get('/api/info', (req, res) => {
     res.json({
+      version: VERSION,
       url: publicBaseUrl(req),
       addresses: getLanAddresses().map((a) => ({ name: a.name, url: `http://${a.address}:${port}`, virtual: a.virtual })),
     });
@@ -162,7 +164,7 @@ async function main() {
   const best = addrs[0];
   const url = best ? `http://${best.address}:${port}` : null;
 
-  console.log('\n💌  Love Letter — serveur local démarré\n');
+  console.log(`\n💌  Love Letter v${VERSION} — serveur local démarré\n`);
   console.log(`   Sur cet ordinateur : http://localhost:${port}`);
   if (url) {
     console.log(`   Sur les téléphones (même Wi-Fi) : \x1b[1m${url}\x1b[0m\n`);

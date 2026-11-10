@@ -56,31 +56,75 @@ describe('Paquet et mise en place', () => {
 });
 
 describe('Fin de manche', () => {
-  test('par élimination : le survivant gagne et commence la manche suivante', () => {
+  test('par élimination : le survivant gagne, le premier éliminé commence la manche suivante', () => {
     const s = makeRound({ players: ['A', 'B'], hands: { A: ['guard', 'priest'], B: ['baron'] }, deck: ['king', 'handmaid'] });
-    let { state } = act(s, 'A', { type: 'play', card: 'guard', target: 'B', guess: 'baron' });
+    let { state, events } = act(s, 'A', { type: 'play', card: 'guard', target: 'B', guess: 'baron' });
     assert.equal(state.phase, 'roundOver');
     assert.equal(state.roundResult.reason, 'lastStanding');
     assert.deepEqual(state.roundResult.winners, ['A']);
     assert.deepEqual(state.roundResult.revealed, {}, 'le survivant ne révèle pas sa main');
+    assert.deepEqual(state.roundResult.eliminationOrder, ['B']);
+    assert.equal(state.roundResult.nextStarter, 'B');
+    assert.equal(state.roundResult.nextStarterReason, 'firstEliminated');
+    assert.match(events.find((e) => e.type === 'nextStarter').text, /B commencera/);
     assert.equal(player(state, 'A').tokens, 1);
     assertGameError(() => act(state, 'A', { type: 'play', card: 'priest', target: 'B' }), 'BAD_PHASE');
 
-    state = applyHostAction(state, { type: 'nextRound' }).state;
+    const next = applyHostAction(state, { type: 'nextRound' });
+    state = next.state;
     assert.equal(state.round, s.round + 1);
-    assert.equal(state.current, 'A');
+    assert.equal(state.current, 'B');
+    assert.match(next.events.find((e) => e.type === 'roundStart').text, /B commence \(a perdu en premier/);
     assert.equal(state.phase, 'playing');
+    assert.deepEqual(state.eliminationOrder, [], "l'ordre des éliminations repart de zéro");
     assert.equal(allCards(state).length, 21);
     assert.equal(player(state, 'A').tokens, 1, 'les jetons sont conservés');
   });
 
-  test('pioche vide : la plus forte main gagne', () => {
+  test('le PREMIER éliminé commence, pas le dernier', () => {
+    // C est éliminé (Garde de A), puis A (Garde de B) : C commence la manche suivante.
+    let s = makeRound({
+      players: ['A', 'B', 'C'], hands: { A: ['guard', 'baron'], B: ['priest'], C: ['king'] }, deck: ['king', 'handmaid', 'guard'],
+    });
+    s = act(s, 'A', { type: 'play', card: 'guard', target: 'C', guess: 'king' }).state;
+    assert.equal(s.current, 'B');
+    s.players.find((p) => p.id === 'B').hand = ['guard', 'priest'];
+    s.players.find((p) => p.id === 'A').hand = ['princess'];
+    s = act(s, 'B', { type: 'play', card: 'guard', target: 'A', guess: 'princess' }).state;
+    assert.equal(s.phase, 'roundOver');
+    assert.deepEqual(s.roundResult.eliminationOrder, ['C', 'A']);
+    assert.equal(s.nextStarter, 'C');
+    assert.equal(applyHostAction(s, { type: 'nextRound' }).state.current, 'C');
+  });
+
+  test("règle officielle en option : le gagnant commence", () => {
+    const { state: g0 } = createGame({ players: names(2), seed: 3, options: { nextRoundStarter: 'winner' } });
+    assert.deepEqual(g0.options, { nextRoundStarter: 'winner' });
+    const s = makeRound({ players: ['A', 'B'], hands: { A: ['guard', 'priest'], B: ['baron'] }, deck: ['king'] });
+    s.options.nextRoundStarter = 'winner';
+    const { state } = act(s, 'A', { type: 'play', card: 'guard', target: 'B', guess: 'baron' });
+    assert.equal(state.nextStarter, 'A');
+    assert.equal(state.roundResult.nextStarterReason, 'winner');
+    assert.equal(applyHostAction(state, { type: 'nextRound' }).state.current, 'A');
+    assertGameError(() => createGame({ players: names(2), options: { nextRoundStarter: 'n/importe' } }), 'BAD_OPTION');
+  });
+
+  test("une élimination par l'hôte ne désigne pas le premier joueur", () => {
+    let s = makeRound({ players: ['A', 'B', 'C'], hands: { A: ['guard', 'priest'], B: ['baron'], C: ['king'] }, deck: ['handmaid', 'guard'] });
+    s = applyHostAction(s, { type: 'forceEliminate', target: 'C' }).state;
+    s = act(s, 'A', { type: 'play', card: 'guard', target: 'B', guess: 'baron' }).state;
+    assert.deepEqual(s.roundResult.eliminationOrder, ['B']);
+    assert.equal(s.nextStarter, 'B');
+  });
+
+  test('pioche vide : la plus forte main gagne ; sans éliminé, la plus faible main commence ensuite', () => {
     const s = makeRound({ players: ['A', 'B', 'C'], hands: { A: ['handmaid', 'guard'], B: ['king'], C: ['priest'] }, deck: [] });
     const { state } = act(s, 'A', { type: 'play', card: 'handmaid' });
     assert.equal(state.roundResult.reason, 'deckEmpty');
     assert.deepEqual(state.roundResult.winners, ['B']);
     assert.deepEqual(state.roundResult.revealed, { A: 'guard', B: 'king', C: 'priest' });
-    assert.equal(state.nextStarter, 'B');
+    assert.equal(state.nextStarter, 'A', 'Garde (1) = plus faible main');
+    assert.equal(state.roundResult.nextStarterReason, 'weakestHand');
   });
 
   test('pioche vide, égalité : la plus grande somme de défausse gagne', () => {
@@ -108,7 +152,18 @@ describe('Fin de manche', () => {
     assert.deepEqual(state.roundResult.winners, ['B', 'A'], 'ordre du tour depuis le premier joueur (B)');
     assert.equal(player(state, 'A').tokens, 1);
     assert.equal(player(state, 'B').tokens, 1);
-    assert.equal(state.nextStarter, 'B', 'le premier gagnant dans l\'ordre du tour commence');
+    assert.equal(state.nextStarter, 'C', 'personne n\'est éliminé : la plus faible main (Garde de C) commence');
+  });
+
+  test('règle officielle : en cas de gagnants multiples, le premier dans l\'ordre du tour commence', () => {
+    const s = makeRound({
+      players: ['A', 'B', 'C'], hands: { A: ['handmaid', 'prince'], B: ['prince'], C: ['guard'] }, deck: [],
+      discards: { A: ['guard'], B: ['prince'], C: [] },
+    });
+    s.options.nextRoundStarter = 'winner';
+    s.startPlayer = 'B';
+    const { state } = act(s, 'A', { type: 'play', card: 'handmaid' });
+    assert.equal(state.nextStarter, 'B');
   });
 });
 
@@ -235,14 +290,14 @@ describe('Fin de partie', () => {
     assert.equal(state.faceUp.length, 3);
     assert.deepEqual(player(state, 'C').hand, []);
     assert.equal(allCards(state).length, 21);
-    assert.equal(state.current, 'A', 'A a gagné la manche précédente');
+    assert.equal(state.current, 'B', 'B avait la plus faible main (Garde) et personne n\'était éliminé');
 
-    // On force une fin rapide : A élimine B au Garde.
-    player(state, 'A').hand = ['guard', 'priest'];
-    player(state, 'B').hand = ['baron'];
-    const end = act(state, 'A', { type: 'play', card: 'guard', target: 'B', guess: 'baron' }).state;
+    // On force une fin rapide : B élimine A au Garde.
+    player(state, 'B').hand = ['guard', 'priest'];
+    player(state, 'A').hand = ['baron'];
+    const end = act(state, 'B', { type: 'play', card: 'guard', target: 'A', guess: 'baron' }).state;
     assert.equal(end.phase, 'gameOver');
-    assert.deepEqual(end.winners, ['A']);
+    assert.deepEqual(end.winners, ['B']);
   });
 });
 

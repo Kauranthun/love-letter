@@ -30,6 +30,7 @@ function buildView(state, viewerId) {
     current: state.current,
     startPlayer: state.startPlayer,
     tokensToWin: state.tokensToWin,
+    options: { ...state.options },
     deckCount: state.deck.length,
     setAsideCount: state.setAside ? 1 : 0,
     faceUp: [...state.faceUp],
@@ -78,6 +79,9 @@ function buildView(state, viewerId) {
       spyHolders: [...r.spyHolders],
       spyBonus: r.spyBonus,
       gained: { ...r.gained },
+      eliminationOrder: [...(r.eliminationOrder || [])],
+      nextStarter: r.nextStarter || null,
+      nextStarterReason: r.nextStarterReason || null,
     };
   }
   return view;

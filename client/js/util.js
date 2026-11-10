@@ -13,8 +13,10 @@ export function toast(message, kind = 'info') {
   el.textContent = message;
   el.className = `toast-${kind}`;
   el.hidden = false;
+  el.onclick = () => { el.hidden = true; }; // un appui ferme le message
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, kind === 'error' ? 4000 : 2500);
+  const ms = { error: 4000, alert: 5000, secret: 5000 }[kind] || 2500;
+  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
 /** Vibration courte si le téléphone le permet. */

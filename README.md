@@ -1,5 +1,8 @@
 # 💌 Love Letter — édition 2019, en réseau local
 
+**Version 1.1.0** — voir le [CHANGELOG](CHANGELOG.md). Branches : `main` = dernière version ;
+`release/x.y.z` = chaque version figée (tags `vx.y.z`).
+
 Jeu de cartes **Love Letter (édition 2019)** pour **2 à 6 joueurs**, jouable autour d'une table :
 un ordinateur lance le serveur, chaque joueur rejoint depuis le **navigateur de son téléphone**.
 
@@ -25,6 +28,7 @@ un ordinateur lance le serveur, chaque joueur rejoint depuis le **navigateur de 
 7. [Tests et simulation](#7-tests-et-simulation)
 8. [Architecture](#8-architecture)
 9. [Checklist de test manuel](#9-checklist-de-test-manuel)
+10. [Versions et branches](#10-versions-et-branches)
 
 ---
 
@@ -84,6 +88,10 @@ Le serveur peut héberger **plusieurs parties simultanées** (chacune a son code
 
 Conseils :
 
+- **Main cachée** : vos cartes s'affichent face cachée pour que vos voisins ne les voient pas d'un coup
+  d'œil. Touchez « 👁 Voir ma main » ; elles se recachent après votre tour, au bout de 8 secondes hors de
+  votre tour, ou dès que le téléphone se verrouille. Les informations secrètes (Prêtre, Baron, Roi) du
+  journal sont masquées de la même façon.
 - **Écran verrouillé / Wi-Fi perdu** : rouvrez simplement la page, le téléphone reprend sa place
   (jeton enregistré dans le navigateur). Les autres voient 📴 pendant l'absence.
 - Si un joueur ne revient pas, l'**hôte** peut l'**éliminer de la manche** (bouton dans le panneau
@@ -197,7 +205,12 @@ Précisions d'arbitrage retenues :
   le Prince doit alors cibler son propre joueur.
 - La fin de manche « pioche vide » est vérifiée après la résolution complète du tour (Chancelier compris).
 - Chancelier : la carte remise **en premier** passe sous la pioche avant la seconde, qui finit donc tout en dessous.
-- Gagnants multiples : le premier dans l'ordre du tour (depuis le premier joueur de la manche) commence la suivante.
+- **Premier joueur de la manche suivante (règle de la table)** : le joueur qui a **perdu en premier** la
+  manche (premier éliminé). Si personne n'a été éliminé, celui qui avait la plus faible main à la révélation
+  (puis la plus petite défausse). Une élimination décidée par l'hôte (joueur déconnecté) ne compte pas.
+  La règle officielle (« le gagnant commence ; s'il y en a plusieurs, le premier dans l'ordre du tour ») reste
+  disponible : `rules.nextRoundStarter: 'winner'` dans `server/editions/2019.js`.
+- Le journal repart de zéro à chaque manche (il reste lisible jusqu'au lancement de la suivante).
 - Égalité au seuil de jetons : manche de départage avec les seuls ex aequo (mise en place selon leur nombre,
   donc 3 cartes visibles s'ils sont 2) ; la partie s'arrête dès que l'un d'eux a strictement plus de jetons.
 - La carte écartée face cachée n'est **jamais** révélée, même en fin de manche ; le dernier survivant
@@ -309,7 +322,17 @@ love-letter/
 **Fins de manche et de partie**
 - [ ] Fin par élimination : le survivant gagne 1 jeton, sa main n'est pas révélée.
 - [ ] Fin par pioche vide : mains révélées, somme des défausses affichée, ex aequo gérés.
-- [ ] Bonus Espionne détaillé (un seul → +1 ; plusieurs → aucun) ; le gagnant commence la manche suivante.
+- [ ] Bonus Espionne détaillé (un seul → +1 ; plusieurs → aucun).
+- [ ] Le **premier éliminé** commence la manche suivante (annoncé en fin de manche) ; sans éliminé, la plus faible main.
+- [ ] Le journal est vide au début de chaque nouvelle manche, et regroupé par tour.
+
+**Lisibilité et discrétion (v1.1)**
+- [ ] La main est affichée face cachée ; « Voir ma main » la retourne ; elle se recache après mon tour,
+      après 8 s hors de mon tour, et quand je verrouille le téléphone.
+- [ ] Quand la main est cachée, les lignes secrètes du journal et les bandeaux (Prêtre, Baron, Roi) sont masqués.
+- [ ] Le panneau « Dernier coup » montre la carte jouée et ses conséquences ; il est surligné si j'étais visé.
+- [ ] Chaque tuile de joueur affiche sa dernière carte défaussée.
+- [ ] Quand un autre joueur me cible, un bandeau 🎯 s'affiche (et le téléphone vibre sur Android).
 - [ ] Fin de partie : classement, « Nouvelle partie » ramène tout le monde au salon.
 
 **Confidentialité et robustesse**
@@ -317,3 +340,15 @@ love-letter/
 - [ ] Deux parties en parallèle (deux codes) ne se mélangent pas.
 - [ ] Affichage correct à 360 px de large avec 6 joueurs (pas de défilement horizontal).
 - [ ] Bouton « 📜 Règles » disponible sur l'accueil, le salon et en jeu.
+
+## 10. Versions et branches
+
+| Branche / tag | Contenu |
+|---|---|
+| `main` | toujours la **dernière version** publiée |
+| `release/1.1.0` · tag `v1.1.0` | main cachée, journal par manche, premier éliminé qui commence, interface plus claire |
+| `release/1.0.0` · tag `v1.0.0` | première version complète |
+
+Numérotation [SemVer](https://semver.org/lang/fr/) : `MAJEUR.MINEUR.CORRECTIF`. Une nouvelle version se
+prépare sur une branche `release/x.y.z`, puis est fusionnée dans `main` et marquée d'un tag `vx.y.z`.
+Pour rejouer une ancienne version : `git checkout v1.0.0` (puis `npm install` et `npm start`).

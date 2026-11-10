@@ -1,5 +1,5 @@
-// Écran de jeu : joueurs, main, choix de la carte / cible / carte nommée, Chancelier,
-// fins de manche et de partie, outils de l'hôte, défausses, journal.
+// Écran de jeu : joueurs, main (cachée par défaut), choix de la carte / cible / carte nommée,
+// Chancelier, dernier coup joué, fins de manche et de partie, outils de l'hôte, défausses, journal.
 import { esc, toast } from '../util.js';
 import { cardArt } from '../cards-art.js';
 
@@ -42,6 +42,53 @@ function bigCard(h, id, { act = null, data = '', selected = false, disabled = fa
     </${tag}>`;
 }
 
+/** Dos de carte : la main est cachée aux regards tant que le joueur ne la montre pas. */
+function cardBack(compact = false) {
+  return `
+    <button type="button" class="card back ${compact ? 'compact' : ''}" data-act="reveal" aria-label="Carte cachée : toucher pour voir">
+      <span class="back-seal" aria-hidden="true">♥</span>
+      <span class="back-label">Toucher pour voir</span>
+    </button>`;
+}
+
+/** Bloc « main cachée » : dos de cartes + gros bouton pour retourner. */
+function hiddenHand(n, title, extra = '') {
+  return `
+  <section class="my-hand hidden-hand">
+    <h2>${title}</h2>
+    <div class="hand n${n}">${Array.from({ length: n }, () => cardBack(n === 3)).join('')}</div>
+    <button type="button" class="btn primary big" data-act="reveal">👁 Voir ${n > 1 ? 'mes cartes' : 'ma carte'}</button>
+    <p class="note center">Vos cartes restent cachées aux regards ; elles se retournent toutes seules après votre tour.${extra}</p>
+  </section>`;
+}
+
+/** Texte d'un événement du journal (les informations privées sont masquées si la main est cachée). */
+function eventText(e, reveal) {
+  if (e.scope === 'private' && !reveal) return '🔒 Information secrète : affichez votre main pour la lire.';
+  return `${e.scope === 'private' ? '🔒 ' : ''}${esc(e.text)}`;
+}
+
+/**
+ * Regroupe le journal de la manche par tour :
+ * [{ kind:'start'|'turn'|'end', player, items:[événements] }]
+ */
+function groupLog(log) {
+  const groups = [];
+  let cur = null;
+  const open = (kind, player = null) => {
+    cur = { kind, player, items: [] };
+    groups.push(cur);
+  };
+  for (const e of log) {
+    if (e.type === 'roundStart') { open('start'); cur.items.push(e); continue; }
+    if (e.type === 'turn') { open('turn', e.player); continue; }
+    if (e.type === 'roundEnd') open('end');
+    if (!cur) open('start');
+    cur.items.push(e);
+  }
+  return groups;
+}
+
 // ---------------------------------------------------------------------------
 // Blocs de l'écran
 // ---------------------------------------------------------------------------
@@ -68,19 +115,21 @@ function playersGrid(h) {
     if (p.spyPlayed && !p.eliminated) badges.push('<span title="A joué ou défaussé une Espionne">🕵️</span>');
     if (!h.connected(p.id)) badges.push('<span title="Déconnecté">📴</span>');
     const isCurrent = g.phase === 'playing' && g.current === p.id;
+    const last = p.discard.length ? p.discard[p.discard.length - 1] : null;
     const cls = ['ptile', isCurrent ? 'current' : '', p.eliminated || !p.inRound ? 'out' : '', p.id === me.id ? 'me' : ''].join(' ');
     return `
     <div class="${cls}" aria-label="${esc(p.name)}, ${p.tokens} jetons${isCurrent ? ', joue' : ''}${p.eliminated ? ', éliminé' : ''}">
       <div class="pname">${isCurrent ? '▶ ' : ''}${esc(p.name)}${p.id === me.id ? ' <small>(vous)</small>' : ''}</div>
       <div class="ptokens"><span class="hearts">${'♥'.repeat(Math.min(p.tokens, 6))}</span><small>${p.tokens}/${g.tokensToWin}</small></div>
       <div class="pbadges">${badges.join('')}</div>
+      <div class="plast" title="Dernière carte défaussée">${last && g.phase === 'playing' ? chip(h, last) : ''}</div>
     </div>`;
   }).join('');
   return `<div class="players n${list.length}">${tiles}</div>`;
 }
 
-/** Ligne d'état : à qui de jouer ? + dernier coup public + Espionnes jouées. */
-function statusBlock(h, app) {
+/** Ligne d'état : qui joue, et que se passe-t-il ? */
+function statusBlock(h) {
   const { g, me } = h;
   if (g.phase !== 'playing') return '';
   const mine = h.player(me.id);
@@ -88,19 +137,44 @@ function statusBlock(h, app) {
   let mineTurn = false;
   if (mine && !mine.inRound) msg = 'Vous ne participez pas à cette manche de départage.';
   else if (mine && mine.eliminated) msg = `Vous êtes éliminé de cette manche. Au tour de ${h.name(g.current)}.`;
-  else if (g.pending && g.pending.playerId !== me.id) msg = `${h.name(g.pending.playerId)} utilise le Chancelier…`;
-  else if (g.current === me.id) { msg = g.pending ? 'Chancelier : à vous de choisir.' : '⭐ À vous de jouer !'; mineTurn = true; }
-  else msg = `Au tour de ${h.name(g.current)}…`;
+  else if (g.pending && g.pending.playerId !== me.id) msg = `⏳ ${h.name(g.pending.playerId)} utilise le Chancelier et choisit ses cartes…`;
+  else if (g.current === me.id) { msg = g.pending ? '⭐ Chancelier : à vous de choisir.' : '⭐ À vous de jouer !'; mineTurn = true; }
+  else msg = `⏳ Au tour de ${h.name(g.current)} : en train de choisir une carte…`;
   if (g.current && g.current !== me.id && !h.connected(g.current)) msg += ' <span class="warn">(déconnecté)</span>';
 
-  const last = [...app.log].reverse().find((e) => e.scope === 'public' && !['turn', 'roundStart', 'faceUp'].includes(e.type));
   const spies = g.players.filter((p) => p.spyPlayed && !p.eliminated);
   return `
   <div class="status ${mineTurn ? 'my-turn' : ''}">${msg}</div>
-  ${last ? `<p class="last-move">${esc(last.text)}</p>` : ''}
   ${spies.length ? `<p class="spy-line">🕵️ Espionne jouée par : ${spies.map((p) => h.name(p.id)).join(', ')}
-    ${spies.length > 1 ? '<small>(personne n\'aura le bonus si ça reste ainsi)</small>' : ''}</p>` : ''}
+    ${spies.length > 1 ? '<small>(si ça reste ainsi, personne n\'aura le bonus)</small>' : ''}</p>` : ''}
   ${g.faceUp.length ? `<div class="faceup"><span>Retirées (visibles) :</span> ${g.faceUp.map((c) => chip(h, c)).join(' ')}</div>` : ''}`;
+}
+
+/** Panneau « Dernier coup » : la carte jouée en grand et ses conséquences. */
+function lastMovePanel(h, app) {
+  if (h.g.phase !== 'playing') return '';
+  const groups = groupLog(app.log);
+  const last = [...groups].reverse().find((gr) => gr.kind === 'turn' && gr.items.some((e) => e.type === 'play'));
+  if (!last) {
+    const start = groups.find((gr) => gr.kind === 'start');
+    const ev = start && start.items.find((e) => e.type === 'roundStart');
+    return ev ? `<div class="panel last-move start"><p>${esc(ev.text)}</p></div>` : '';
+  }
+  const play = last.items.find((e) => e.type === 'play');
+  const c = h.card(play.card);
+  const consequences = last.items.filter((e) => e !== play && !(e.scope === 'private' && e.type === 'draw'));
+  const targetMe = play.target === h.me.id && play.player !== h.me.id;
+  return `
+  <div class="panel last-move ${targetMe ? 'targets-me' : ''}">
+    <div class="lm-head">Dernier coup${play.player === h.me.id ? ' (le vôtre)' : ''}${targetMe ? ' — <b>vous étiez visé !</b>' : ''}</div>
+    <div class="lm-body">
+      <div class="lm-card v${c.value}">${cardArt(c.id)}<span><b>${c.value}</b> ${esc(c.name)}</span></div>
+      <div class="lm-text">
+        <p class="lm-main">${esc(play.text)}</p>
+        ${consequences.map((e) => `<p class="lm-sub ${e.type === 'eliminated' ? 'bad' : ''} ${e.scope === 'private' ? 'private' : ''}">${eventText(e, app.ui.reveal)}</p>`).join('')}
+      </div>
+    </div>
+  </div>`;
 }
 
 /** Étape courante du choix d'un coup. */
@@ -126,21 +200,21 @@ function actionPanel(h, ui) {
   if (!sel) return '<div class="panel action hint-panel"><p>👆 Touchez la carte que vous voulez jouer.</p></div>';
   const entry = g.legal.find((e) => e.card === sel.card);
   const step = playStep(entry, sel);
-  let body = '';
+  let body = `<p class="effect"><b>${h.label(sel.card)} :</b> ${esc(h.card(sel.card).text)}</p>`;
   if (step === 'target') {
     const self = entry.targets.includes(h.me.id);
-    body = `<p class="step">Qui ciblez-vous avec ${h.label(sel.card)} ?</p>
+    body += `<p class="step">Qui ciblez-vous ?</p>
       <div class="choices">${entry.targets.map((id) => `
         <button type="button" class="btn choice" data-act="target" data-id="${esc(id)}">${id === h.me.id ? 'Vous-même' : h.name(id)}</button>`).join('')}
       </div>
       ${self && entry.targets.length === 1 ? '<p class="note">Tous vos adversaires sont protégés : vous devez vous cibler.</p>' : ''}`;
   } else if (step === 'guess') {
-    body = `<p class="step">Selon vous, quelle carte ${h.name(sel.target)} a en main ?</p>
+    body += `<p class="step">Selon vous, quelle carte ${h.name(sel.target)} a en main ?</p>
       <div class="choices guesses">${entry.guesses.map((id) => `
         <button type="button" class="btn choice v${h.card(id).value}" data-act="guess" data-card="${id}"><b>${h.card(id).value}</b>&nbsp;${esc(h.card(id).name)}</button>`).join('')}
       </div>`;
   } else {
-    body = `<p class="summary">${describePlay(h, entry, sel)}</p>
+    body += `<p class="summary">${describePlay(h, entry, sel)}</p>
       <button type="button" class="btn primary big" data-act="confirm">✔ Confirmer</button>`;
   }
   return `<div class="panel action">${body}<button type="button" class="btn link" data-act="cancel">Annuler</button></div>`;
@@ -149,6 +223,10 @@ function actionPanel(h, ui) {
 /** Écran privé du Chancelier. */
 function chancellorPanel(h, ui) {
   const pd = h.g.pending;
+  if (!ui.reveal) {
+    const n = pd.step === 'keep' ? h.g.hand.length : 2;
+    return hiddenHand(n, '🔒 Chancelier : vos cartes sont cachées');
+  }
   if (pd.step === 'keep') {
     const hand = h.g.hand;
     return `
@@ -159,6 +237,7 @@ function chancellorPanel(h, ui) {
       ${ui.keep !== null
         ? `<button type="button" class="btn primary big" data-act="keepConfirm">✔ Garder ${h.label(hand[ui.keep])}</button>`
         : ''}
+      <button type="button" class="btn link" data-act="hideHand">🙈 Cacher mes cartes</button>
     </div>`;
   }
   const cards = pd.cards;
@@ -174,6 +253,7 @@ function chancellorPanel(h, ui) {
         </div>`).join('')}
       </div>
       <p class="note">La carte remise en second se retrouve tout en dessous de la pioche.</p>
+      <button type="button" class="btn link" data-act="hideHand">🙈 Cacher mes cartes</button>
     </div>`;
   }
   const [a, b] = ui.order;
@@ -195,6 +275,8 @@ function handSection(h, ui) {
   if (!mine || !mine.inRound || mine.eliminated || g.phase !== 'playing') return '';
   if (g.pending && g.pending.playerId === me.id) return ''; // affichée dans l'écran du Chancelier
   const myTurn = g.current === me.id && !g.pending;
+  if (!ui.reveal) return hiddenHand(g.hand.length, 'Votre main (cachée)');
+
   const cards = g.hand.map((c) => {
     if (!myTurn) return bigCard(h, c);
     const entry = g.legal.find((e) => e.card === c);
@@ -206,7 +288,12 @@ function handSection(h, ui) {
       note: entry.playable ? '' : entry.reason,
     });
   }).join('');
-  return `<section class="my-hand"><h2>Votre main</h2><div class="hand n${g.hand.length}">${cards}</div></section>`;
+  return `
+  <section class="my-hand">
+    <div class="hand-head"><h2>Votre main</h2>
+      <button type="button" class="btn tiny" data-act="hideHand">🙈 Cacher</button></div>
+    <div class="hand n${g.hand.length}">${cards}</div>
+  </section>`;
 }
 
 /** Tableau des jetons (fin de manche / de partie). */
@@ -220,6 +307,13 @@ function standings(h) {
     </li>`).join('')}</ul>`;
 }
 
+const STARTER_REASON = {
+  firstEliminated: 'a perdu en premier cette manche',
+  weakestHand: 'personne n\'a été éliminé : plus faible main',
+  winner: 'gagnant de la manche',
+  seat: 'joueur suivant dans l\'ordre du tour',
+};
+
 function roundOverPanel(h) {
   const { g, me } = h;
   const r = g.roundResult;
@@ -227,9 +321,12 @@ function roundOverPanel(h) {
   const reason = r.reason === 'lastStanding'
     ? 'Il ne reste qu\'un joueur en lice.'
     : 'La pioche est vide : les joueurs en lice révèlent leur main.';
+  const order = r.eliminationOrder || [];
   const rows = Object.keys(r.discardSums).map((id) => {
     const p = h.player(id);
-    const hand = r.revealed[id] ? chip(h, r.revealed[id]) : p.eliminated ? '<span class="out">éliminé</span>' : '<span class="muted">cachée</span>';
+    const rank = order.indexOf(id);
+    const hand = r.revealed[id] ? chip(h, r.revealed[id])
+      : p.eliminated ? `<span class="out">éliminé${rank >= 0 ? ` (${rank === 0 ? '1ᵉʳ' : `${rank + 1}ᵉ`})` : ''}</span>` : '<span class="muted">cachée</span>';
     const g1 = r.winners.includes(id) ? '<span class="gain">+1 ♥</span>' : '';
     const g2 = r.spyBonus === id ? '<span class="gain">+1 🕵️</span>' : '';
     return `<tr class="${r.winners.includes(id) ? 'win' : ''}">
@@ -243,9 +340,13 @@ function roundOverPanel(h) {
 
   let footer = '';
   if (g.phase !== 'gameOver') {
-    footer = me.isHost
+    const next = r.nextStarter
+      ? `<p class="next-starter">➜ <b>${h.name(r.nextStarter)}</b> commencera la manche suivante
+          <small>(${STARTER_REASON[r.nextStarterReason] || ''})</small></p>`
+      : '';
+    footer = next + (me.isHost
       ? `<button type="button" class="btn primary big" data-act="nextRound">${g.tiebreak ? '⚔️ Lancer le départage' : 'Manche suivante ➜'}</button>`
-      : '<p class="waiting">En attente de l\'hôte pour la manche suivante…</p>';
+      : '<p class="waiting">En attente de l\'hôte pour la manche suivante…</p>');
   }
 
   return `
@@ -315,13 +416,26 @@ function discards(h, ui) {
       ${open ? `<div class="discard-cards">${p.discard.map((c) => chip(h, c)).join(' ') || '<small class="muted">vide</small>'}</div>` : ''}
     </li>`;
   }).join('');
-  return `<section class="discards"><h2>Défausses</h2><ul>${rows}</ul></section>`;
+  return `<section class="discards"><h2>Défausses <small>(ordre de jeu, la plus récente à droite)</small></h2><ul>${rows}</ul></section>`;
 }
 
-function logSection(app) {
-  const items = app.log.slice(-50).reverse().map((e) =>
-    `<li class="${e.scope === 'private' ? 'private' : ''} t-${esc(e.type)}">${e.scope === 'private' ? '🔒 ' : ''}${esc(e.text)}</li>`).join('');
-  return `<section class="log"><h2>Journal</h2><ol>${items}</ol></section>`;
+/** Journal de la manche en cours, regroupé par tour (le plus récent en haut). */
+function logSection(h, app) {
+  const groups = groupLog(app.log).reverse();
+  // Une fois la manche finie, plus rien à cacher : les infos privées s'affichent en clair.
+  const reveal = app.ui.reveal || h.g.phase !== 'playing';
+  const title = (gr) => {
+    if (gr.kind === 'start') return 'Début de la manche';
+    if (gr.kind === 'end') return 'Fin de la manche';
+    return gr.player === h.me.id ? 'Votre tour' : `Tour de ${h.name(gr.player)}`;
+  };
+  const items = groups.filter((gr) => gr.items.length || gr.kind === 'turn').map((gr) => `
+    <li class="log-group ${gr.kind} ${gr.player === h.me.id ? 'mine' : ''}">
+      <div class="log-title">${title(gr)}</div>
+      ${gr.items.length ? gr.items.map((e) => `<p class="${e.scope === 'private' ? 'private' : ''} t-${esc(e.type)}">${eventText(e, reveal)}</p>`).join('')
+        : '<p class="muted">… choisit une carte</p>'}
+    </li>`).join('');
+  return `<section class="log"><h2>Journal de la manche ${h.g.round}</h2><ol>${items}</ol></section>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -341,18 +455,20 @@ export function renderGame(app) {
   } else if (g.pending && g.pending.playerId === me.id) {
     main = chancellorPanel(h, ui);
   } else {
-    main = handSection(h, ui) + (g.current === me.id && !g.pending ? actionPanel(h, ui) : '');
+    const myTurn = g.current === me.id && !g.pending;
+    main = handSection(h, ui) + (myTurn && ui.reveal ? actionPanel(h, ui) : '');
   }
 
   return `
   <section class="screen game">
     ${topBar(h)}
     ${playersGrid(h)}
-    ${statusBlock(h, app)}
+    ${statusBlock(h)}
+    ${lastMovePanel(h, app)}
     ${main}
     ${hostPanel(h, ui)}
     ${g.phase === 'playing' ? discards(h, ui) : ''}
-    ${logSection(app)}
+    ${logSection(h, app)}
   </section>`;
 }
 

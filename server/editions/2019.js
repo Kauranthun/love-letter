@@ -87,4 +87,15 @@ module.exports = {
     faceDown: 1,                       // cartes écartées face cachée
     faceUpByPlayerCount: { 2: 3 },     // cartes retirées face visible (à 2 joueurs uniquement)
   },
+
+  /** Options de règles (modifiables par partie via createGame({ options })). */
+  rules: {
+    /**
+     * Qui commence la manche suivante ?
+     *  - 'firstEliminated' : le premier joueur éliminé de la manche (règle de la table, par défaut).
+     *    Si personne n'a été éliminé, celui qui avait la plus faible main à la révélation.
+     *  - 'winner'          : le gagnant de la manche (règle officielle).
+     */
+    nextRoundStarter: 'firstEliminated',
+  },
 };

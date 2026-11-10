@@ -336,9 +336,14 @@ class RoomManager {
     };
   }
 
-  /** Enregistre des événements et diffuse le nouvel état à tous. */
+  /**
+   * Enregistre des événements et diffuse le nouvel état à tous.
+   * Le journal repart de zéro à chaque nouvelle manche (événement 'roundStart').
+   */
   pushEvents(room, events) {
-    room.events.push(...events);
+    const k = events.map((e) => e.type).lastIndexOf('roundStart');
+    if (k >= 0) room.events = events.slice(k);
+    else room.events.push(...events);
     if (room.events.length > MAX_EVENTS) room.events.splice(0, room.events.length - MAX_EVENTS);
     room.lastActivity = this.now();
     this.broadcast(room, events);

@@ -11,14 +11,42 @@ const app = {
   edition: null,     // cartes (noms, valeurs, textes)
   info: null,        // URL du serveur pour les QR codes
   payload: null,     // dernière vue reçue : { room, me, game }
-  log: [],           // journal d'événements
+  log: [],           // journal de la manche en cours
   ui: freshUi(),     // sélections en cours (carte, cible…)
   screen: null,
 };
 
 function freshUi() {
-  return { sel: null, keep: null, order: [], open: {}, confirmHost: null, scroll: null };
+  // reveal : la main est-elle retournée (visible) ? Par défaut non : protège des regards indiscrets.
+  return { sel: null, keep: null, order: [], open: {}, confirmHost: null, scroll: null, reveal: false };
 }
+
+// ---------------------------------------------------------------------------
+// Main cachée : on la retourne à la demande, elle se recache toute seule
+// ---------------------------------------------------------------------------
+
+const AUTO_HIDE_MS = 8000;
+let hideTimer = null;
+
+/** Recache la main dans quelques secondes, sauf pendant son propre tour (le joueur réfléchit). */
+function armAutoHide() {
+  clearTimeout(hideTimer);
+  if (!app.ui.reveal || isMyTurn(app.payload)) return;
+  hideTimer = setTimeout(() => hideHand(), AUTO_HIDE_MS);
+}
+
+function hideHand() {
+  clearTimeout(hideTimer);
+  if (!app.ui.reveal) return;
+  app.ui.reveal = false;
+  app.ui.sel = null;
+  if (app.screen === 'game') render();
+}
+
+// Téléphone posé / application en arrière-plan : on recache immédiatement.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') hideHand();
+});
 
 const ctx = {
   app,
@@ -40,6 +68,12 @@ const actions = {
   ...lobbyActions,
   ...gameActions,
   rules: () => openRules(app.edition),
+  reveal: () => {
+    app.ui.reveal = true;
+    armAutoHide();
+    render();
+  },
+  hideHand: () => hideHand(),
 };
 
 /** Grand bandeau « À vous de jouer ! » + vibration. */
@@ -138,6 +172,12 @@ socket.on('state', (payload) => {
   if (isMyTurn(payload) && !isMyTurn(prev)) {
     if (prev) flashMyTurn();
     ui.sel = null;
+    clearTimeout(hideTimer); // pas de masquage automatique pendant son propre tour
+  }
+  // Fin de mon tour (coup joué) ou fin de manche : la main se retourne face cachée.
+  if (ui.reveal && ((isMyTurn(prev) && !isMyTurn(payload)) || !g || g.phase !== 'playing')) {
+    ui.reveal = false;
+    clearTimeout(hideTimer);
   }
   // Sélection devenue invalide (plus mon tour, carte plus en main…)
   if (ui.sel && (!isMyTurn(payload) || g.pending || !g.legal.some((e) => e.card === ui.sel.card && e.playable))) {
@@ -155,11 +195,27 @@ socket.on('state', (payload) => {
 });
 
 socket.on('events', (events) => {
-  app.log.push(...events);
+  // Nouvelle manche : le journal repart de zéro.
+  const k = events.map((e) => e.type).lastIndexOf('roundStart');
+  if (k >= 0) app.log = events.slice(k);
+  else app.log.push(...events);
   if (app.log.length > 300) app.log.splice(0, app.log.length - 300);
-  // Les informations secrètes (Prêtre, Baron, Roi) s'affichent aussi en bandeau.
+
+  const me = app.payload && app.payload.me.id;
   for (const e of events) {
-    if (e.scope === 'private' && ['peek', 'baron', 'swap'].includes(e.type)) toast(e.text, 'secret');
+    // Informations secrètes (Prêtre, Baron, Roi) : en clair seulement si la main est retournée.
+    if (e.scope === 'private' && ['peek', 'baron', 'swap'].includes(e.type)) {
+      toast(app.ui.reveal ? e.text : '🔒 Vous avez reçu une information secrète : touchez « Voir ma main » pour la lire.', 'secret');
+    }
+    // Je suis visé par un autre joueur : je dois le remarquer.
+    if (e.scope === 'public' && e.type === 'play' && e.target === me && e.player !== me) {
+      toast(`🎯 ${e.text}`, 'alert');
+      vibrate(80);
+    }
+    if (e.type === 'eliminated' && e.player === me) {
+      toast('❌ Vous êtes éliminé de cette manche.', 'error');
+      vibrate([60, 60, 200]);
+    }
   }
   render();
 });

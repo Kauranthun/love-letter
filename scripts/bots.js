@@ -127,7 +127,9 @@ const stats = { games: 0, rounds: 0, steps: 0, tiebreaks: 0, kicks: 0, illegalRe
 
 function playGame(n, seed) {
   const players = Array.from({ length: n }, (_, i) => ({ id: `b${i}`, name: `Bot ${i}` }));
-  let { state: s } = createGame({ players, seed });
+  // Une partie sur deux avec la règle officielle (le gagnant commence la manche suivante).
+  const nextRoundStarter = seed % 2 ? 'winner' : 'firstEliminated';
+  let { state: s } = createGame({ players, seed, options: { nextRoundStarter } });
   let tokens = {};
   let steps = 0;
   checkState(s, tokens);
@@ -140,7 +142,16 @@ function playGame(n, seed) {
       stats.rounds++;
       if (s.roundResult.spyBonus) stats.spyBonuses++;
       if (s.roundResult.reason === 'deckEmpty') stats.deckEmptyEnds++;
+      const rr = s.roundResult;
+      // Premier joueur annoncé : premier éliminé (hors hôte), sinon plus faible main ; ou gagnant (règle officielle).
+      if (nextRoundStarter === 'firstEliminated' && rr.eliminationOrder.length && rr.nextStarterReason !== 'seat') {
+        check(rr.nextStarter === rr.eliminationOrder[0], 'le premier éliminé ne commence pas');
+      }
+      if (nextRoundStarter === 'winner' && rr.nextStarterReason === 'winner') {
+        check(rr.winners.includes(rr.nextStarter), 'le gagnant ne commence pas');
+      }
       res = applyHostAction(s, { type: 'nextRound' });
+      check(res.state.current === rr.nextStarter, 'le premier joueur annoncé ne commence pas');
     } else if (rng.nextRandom(r) < 0.01) {
       // L'hôte élimine un joueur « déconnecté » au hasard.
       const alive = s.players.filter((p) => s.roundPlayers.includes(p.id) && !p.eliminated);
